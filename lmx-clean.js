@@ -2,7 +2,7 @@
   'use strict';
 
   var NAME = 'LMX Clean';
-  var VERSION = '0.1.1';
+  var VERSION = '0.1.2';
   var COMPONENT = 'lmx_clean';
   var started = false;
   var patched = {
@@ -13,8 +13,12 @@
     player: false,
     utils: false,
     ima: false,
-    account: false
+    account: false,
+    storage: false,
+    accountApi: false
   };
+
+  var PREMIUM_UNTIL = 4102444800000;
 
   var manifest = {
     type: 'other',
@@ -252,31 +256,43 @@
   }
 
   function patchUtils() {
-    if (patched.utils || !window.Lampa || !Lampa.Utils || !Lampa.Utils.putScriptAsync) return;
+    if (patched.utils || !window.Lampa || !Lampa.Utils) return;
 
-    var originalPutScriptAsync = Lampa.Utils.putScriptAsync;
+    if (typeof Lampa.Utils.countDays === 'function') {
+      var originalCountDays = Lampa.Utils.countDays;
 
-    Lampa.Utils.putScriptAsync = function (urls, progress, reject, resolve) {
-      var list = Array.isArray(urls) ? urls : [urls];
-      var blocked = list.some(function (url) {
-        return isAdUrl(url) || /\/vender\/vast\/vast\.js/i.test(toUrl(url));
-      });
+      Lampa.Utils.countDays = function () {
+        var result = originalCountDays.apply(this, arguments);
 
-      if (blocked) {
-        log('blocked script:', list.join(', '));
+        return result > 0 ? result : 36500;
+      };
+    }
 
-        setTimeout(function () {
-          if (typeof reject === 'function') reject(new Error('Blocked by ' + NAME));
-        }, 0);
+    if (Lampa.Utils.putScriptAsync) {
+      var originalPutScriptAsync = Lampa.Utils.putScriptAsync;
 
-        return;
-      }
+      Lampa.Utils.putScriptAsync = function (urls, progress, reject, resolve) {
+        var list = Array.isArray(urls) ? urls : [urls];
+        var blocked = list.some(function (url) {
+          return isAdUrl(url) || /\/vender\/vast\/vast\.js/i.test(toUrl(url));
+        });
 
-      return originalPutScriptAsync.apply(this, arguments);
-    };
+        if (blocked) {
+          log('blocked script:', list.join(', '));
+
+          setTimeout(function () {
+            if (typeof reject === 'function') reject(new Error('Blocked by ' + NAME));
+          }, 0);
+
+          return;
+        }
+
+        return originalPutScriptAsync.apply(this, arguments);
+      };
+    }
 
     patched.utils = true;
-    log('script loader patched');
+    log('utils patched');
   }
 
   function patchIma() {
@@ -301,33 +317,176 @@
     var account = Lampa.Account;
 
     try {
+      forcePermitPremium(account);
+      patchAccountApi(account);
+
       if (!account.__lmx_clean_forcedHasPremium) {
-        account.__lmx_clean_forcedHasPremium = function () {
-          return true;
-        };
+        Object.defineProperty(account, '__lmx_clean_forcedHasPremium', {
+          value: function () {
+            forcePermitPremium(window.Lampa && Lampa.Account);
+            return true;
+          },
+          configurable: true
+        });
       }
 
-      if (typeof account.hasPremium === 'function' && account.hasPremium !== account.__lmx_clean_forcedHasPremium && !account.__lmx_clean_hasPremium) {
-        account.__lmx_clean_hasPremium = account.hasPremium;
-      }
-
-      account.hasPremium = account.__lmx_clean_forcedHasPremium;
-
-      if (account.Permit) {
-        if (account.Permit.user && typeof account.Permit.user === 'object') {
-          account.Permit.user.premium = true;
+      if (account.hasPremium !== account.__lmx_clean_forcedHasPremium) {
+        try {
+          Object.defineProperty(account, 'hasPremium', {
+            value: account.__lmx_clean_forcedHasPremium,
+            configurable: true,
+            writable: true
+          });
+        } catch (e) {
+          account = replaceAccountObject(account);
         }
-
-        try { account.Permit.premium = true; } catch (e) {}
       }
+
+      forcePermitPremium(account);
 
       if (!patched.account) {
         patched.account = true;
         log('account premium patched globally');
       }
     } catch (e) {
-      log('account patch failed:', e.message || e);
+      if (!patched.accountErrorLogged) {
+        patched.accountErrorLogged = true;
+        log('account patch failed:', e.message || e);
+      }
     }
+  }
+
+  function forcePermitPremium(account) {
+    if (!account || !account.Permit) return;
+
+    try {
+      if (account.Permit.user && typeof account.Permit.user === 'object') {
+        forceUserPremium(account.Permit.user);
+      }
+    } catch (e) {}
+
+    try {
+      if (account.Permit.account && typeof account.Permit.account === 'object') {
+        forceUserPremium(account.Permit.account);
+      }
+    } catch (e) {}
+
+    try { account.Permit.premium = true; } catch (e) {}
+  }
+
+  function forceUserPremium(user) {
+    if (!user || typeof user !== 'object') user = {};
+
+    if (!user.id) user.id = 'lmx_clean';
+
+    user.premium = PREMIUM_UNTIL;
+    user.premium_at = PREMIUM_UNTIL;
+    user.premium_to = PREMIUM_UNTIL;
+
+    return user;
+  }
+
+  function patchStorage() {
+    if (patched.storage || !window.Lampa || !Lampa.Storage || !Lampa.Storage.get) return;
+
+    var originalGet = Lampa.Storage.get;
+    var originalSet = Lampa.Storage.set;
+
+    Lampa.Storage.get = function (name, empty) {
+      if (name === 'developer_nopremium') return false;
+
+      var value = originalGet.apply(this, arguments);
+
+      if (name === 'account_user') {
+        value = forceUserPremium(value && typeof value === 'object' ? value : {});
+      }
+
+      return value;
+    };
+
+    if (typeof originalSet === 'function') {
+      Lampa.Storage.set = function (name, value) {
+        if (name === 'developer_nopremium') value = false;
+        if (name === 'account_user') value = forceUserPremium(typeof value === 'string' ? safeJson(value) : value);
+
+        return originalSet.call(this, name, value, arguments[2], arguments[3]);
+      };
+
+      try {
+        Lampa.Storage.set('developer_nopremium', false, true);
+        Lampa.Storage.set('account_user', forceUserPremium(Lampa.Storage.get('account_user', '{}')), true);
+      } catch (e) {}
+    }
+
+    patched.storage = true;
+    log('storage premium patched');
+  }
+
+  function safeJson(value) {
+    try { return JSON.parse(value); } catch (e) { return {}; }
+  }
+
+  function patchAccountApi(account) {
+    if (patched.accountApi || !account || !account.Api || typeof account.Api.user !== 'function') return;
+
+    var originalUser = account.Api.user;
+
+    account.Api.user = function (success, error) {
+      var args = Array.prototype.slice.call(arguments);
+
+      if (typeof success === 'function') {
+        args[0] = function (user) {
+          return success(forceUserPremium(user));
+        };
+      }
+
+      return originalUser.apply(this, args);
+    };
+
+    patched.accountApi = true;
+    log('account api patched');
+  }
+
+  function replaceAccountObject(account) {
+    if (account.__lmx_clean_proxy) return account;
+
+    var copy = {};
+
+    Object.keys(account).forEach(function (key) {
+      copy[key] = account[key];
+    });
+
+    Object.getOwnPropertyNames(account).forEach(function (key) {
+      if (key === 'hasPremium') return;
+      if (Object.prototype.hasOwnProperty.call(copy, key)) return;
+
+      try {
+        Object.defineProperty(copy, key, Object.getOwnPropertyDescriptor(account, key));
+      } catch (e) {}
+    });
+
+    Object.defineProperty(copy, '__lmx_clean_originalAccount', {
+      value: account,
+      configurable: true
+    });
+
+    Object.defineProperty(copy, '__lmx_clean_proxy', {
+      value: true,
+      configurable: true
+    });
+
+    Object.defineProperty(copy, 'hasPremium', {
+      value: function () {
+        forcePermitPremium(copy);
+        return true;
+      },
+      configurable: true,
+      writable: true
+    });
+
+    Lampa.Account = copy;
+
+    return copy;
   }
 
   function patchPlayer() {
@@ -421,6 +580,7 @@
     patchMedia();
     patchUtils();
     patchIma();
+    patchStorage();
     patchAccount();
     patchPlayer();
     cleanupDom();
