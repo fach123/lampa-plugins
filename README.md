@@ -1,7 +1,7 @@
 # LMX Clean
 
-Standalone LAMPA plugin that blocks CUB preroll and banner ad loaders without
-spoofing `Account.hasPremium()`.
+Standalone LAMPA plugin that blocks CUB preroll and banner ad loaders and
+globally forces `Account.hasPremium()` to return `true`.
 
 ## Files
 

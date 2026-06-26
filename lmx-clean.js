@@ -2,7 +2,7 @@
   'use strict';
 
   var NAME = 'LMX Clean';
-  var VERSION = '0.1.0';
+  var VERSION = '0.1.1';
   var COMPONENT = 'lmx_clean';
   var started = false;
   var patched = {
@@ -12,14 +12,15 @@
     media: false,
     player: false,
     utils: false,
-    ima: false
+    ima: false,
+    account: false
   };
 
   var manifest = {
     type: 'other',
     version: VERSION,
     name: NAME,
-    description: 'Blocks LAMPA CUB preroll/banner ad loaders without spoofing premium status.',
+    description: 'Blocks LAMPA CUB ads and forces premium checks to pass.',
     component: COMPONENT
   };
 
@@ -294,6 +295,41 @@
     log('IMA patched');
   }
 
+  function patchAccount() {
+    if (!window.Lampa || !Lampa.Account) return;
+
+    var account = Lampa.Account;
+
+    try {
+      if (!account.__lmx_clean_forcedHasPremium) {
+        account.__lmx_clean_forcedHasPremium = function () {
+          return true;
+        };
+      }
+
+      if (typeof account.hasPremium === 'function' && account.hasPremium !== account.__lmx_clean_forcedHasPremium && !account.__lmx_clean_hasPremium) {
+        account.__lmx_clean_hasPremium = account.hasPremium;
+      }
+
+      account.hasPremium = account.__lmx_clean_forcedHasPremium;
+
+      if (account.Permit) {
+        if (account.Permit.user && typeof account.Permit.user === 'object') {
+          account.Permit.user.premium = true;
+        }
+
+        try { account.Permit.premium = true; } catch (e) {}
+      }
+
+      if (!patched.account) {
+        patched.account = true;
+        log('account premium patched globally');
+      }
+    } catch (e) {
+      log('account patch failed:', e.message || e);
+    }
+  }
+
   function patchPlayer() {
     if (patched.player || !window.Lampa || !Lampa.Player) return;
 
@@ -385,6 +421,7 @@
     patchMedia();
     patchUtils();
     patchIma();
+    patchAccount();
     patchPlayer();
     cleanupDom();
   }
