@@ -2,7 +2,7 @@
   'use strict';
 
   var NAME = 'LMX Clean';
-  var VERSION = '0.1.2';
+  var VERSION = '0.1.3';
   var COMPONENT = 'lmx_clean';
   var started = false;
   var patched = {
@@ -204,34 +204,7 @@
   }
 
   function patchXhr() {
-    if (patched.xhr || !window.XMLHttpRequest) return;
-
-    var originalOpen = XMLHttpRequest.prototype.open;
-    var originalSend = XMLHttpRequest.prototype.send;
-
-    XMLHttpRequest.prototype.open = function (method, url) {
-      this.__lmx_clean_blocked = isAdUrl(url);
-      this.__lmx_clean_url = url;
-
-      if (this.__lmx_clean_blocked) {
-        log('blocked xhr:', url);
-        arguments[1] = 'about:blank';
-      }
-
-      return originalOpen.apply(this, arguments);
-    };
-
-    XMLHttpRequest.prototype.send = function () {
-      if (this.__lmx_clean_blocked) {
-        try { this.abort(); } catch (e) {}
-        return;
-      }
-
-      return originalSend.apply(this, arguments);
-    };
-
     patched.xhr = true;
-    log('xhr patched');
   }
 
   function patchMedia() {
@@ -258,16 +231,6 @@
   function patchUtils() {
     if (patched.utils || !window.Lampa || !Lampa.Utils) return;
 
-    if (typeof Lampa.Utils.countDays === 'function') {
-      var originalCountDays = Lampa.Utils.countDays;
-
-      Lampa.Utils.countDays = function () {
-        var result = originalCountDays.apply(this, arguments);
-
-        return result > 0 ? result : 36500;
-      };
-    }
-
     if (Lampa.Utils.putScriptAsync) {
       var originalPutScriptAsync = Lampa.Utils.putScriptAsync;
 
@@ -292,7 +255,7 @@
     }
 
     patched.utils = true;
-    log('utils patched');
+    log('script loader patched');
   }
 
   function patchIma() {
@@ -390,7 +353,6 @@
     if (patched.storage || !window.Lampa || !Lampa.Storage || !Lampa.Storage.get) return;
 
     var originalGet = Lampa.Storage.get;
-    var originalSet = Lampa.Storage.set;
 
     Lampa.Storage.get = function (name, empty) {
       if (name === 'developer_nopremium') return false;
@@ -404,26 +366,8 @@
       return value;
     };
 
-    if (typeof originalSet === 'function') {
-      Lampa.Storage.set = function (name, value) {
-        if (name === 'developer_nopremium') value = false;
-        if (name === 'account_user') value = forceUserPremium(typeof value === 'string' ? safeJson(value) : value);
-
-        return originalSet.call(this, name, value, arguments[2], arguments[3]);
-      };
-
-      try {
-        Lampa.Storage.set('developer_nopremium', false, true);
-        Lampa.Storage.set('account_user', forceUserPremium(Lampa.Storage.get('account_user', '{}')), true);
-      } catch (e) {}
-    }
-
     patched.storage = true;
     log('storage premium patched');
-  }
-
-  function safeJson(value) {
-    try { return JSON.parse(value); } catch (e) { return {}; }
   }
 
   function patchAccountApi(account) {
@@ -603,7 +547,6 @@
   }
 
   patchFetch();
-  patchXhr();
   patchMedia();
 
   if (window.appready) {
